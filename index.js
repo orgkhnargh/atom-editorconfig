@@ -190,12 +190,33 @@ function initializeTextBuffer(buffer) {
 			// onWillSave-Event-Handler
 			// Trims whitespaces and inserts/strips final newline before saving
 			onWillSave() {
+				const touchModifiedLinesOnly = atom.config.get('editorconfig.touchModifiedLinesOnly');
+
+				const editor = atom.workspace.getTextEditors().reduce((prev, curr) => {
+					return (curr.getBuffer() === buffer && curr) || prev;
+				}, undefined);
+				let lineDiffs = [];
+				let repository = null;
+				if (editor) {
+					repository = getRepositoryByFilePath(editor.getPath());
+					if (repository) {
+						lineDiffs = repository.getLineDiffs(editor.getPath(), buffer.getText());
+					}
+				}
+
 				const settings = this.settings;
 
 				if (settings.trim_trailing_whitespace === true) {
 					// eslint-disable-next-line max-params
 					buffer.backwardsScan(/[ \t]+$/gm, params => {
-						if (params.match[0].length > 0) {
+						if (touchModifiedLinesOnly && repository) {
+							// +1, because rows in ranges are 0-based, but lines in editor and in
+							// repository are 1-based.
+							const lineNumber = params.range.start.row + 1;
+							if (params.match[0].length > 0 && isLineInDiffs(lineNumber, lineDiffs)) {
+								params.replace('');
+							}
+						} else if (params.match[0].length > 0) {
 							params.replace('');
 						}
 					});
@@ -229,6 +250,29 @@ function initializeTextBuffer(buffer) {
 				buffer.onDidSave(reapplyEditorconfig)
 			);
 		}
+	}
+
+	function isLineInDiffs(lineNumber, diffs) {
+		for (const diff of diffs) {
+			if (lineNumber >= diff.newStart &&
+				lineNumber < diff.newStart + diff.newLines) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	function getRepositoryByFilePath(filePath) {
+		// Find the directory the open file belongs to.
+		for (const [index, directory] of atom.project.getDirectories().entries()) {
+			if (directory.contains(filePath)) {
+				// Return the repository instance that corresponds to that directory.
+				// If the directory does not contain a repository, `null` will be returned.
+				return atom.project.getRepositories()[index];
+			}
+		}
+
+		return null;
 	}
 }
 
@@ -344,6 +388,15 @@ const deactivate = () => {
 	statusTile().removeIcon();
 };
 
+const config = {
+	touchModifiedLinesOnly: {
+		type: 'boolean',
+		description: `When enabled, trailing whitespace will only be removed from the lines
+that are included in git diff.`,
+		default: false
+	}
+};
+
 // Apply the statusbar icon-container
 // The icon will be applied if needed
 const consumeStatusBar = statusBar => {
@@ -355,4 +408,4 @@ const consumeStatusBar = statusBar => {
 	}
 };
 
-export default {activate, deactivate, consumeStatusBar};
+export default {activate, deactivate, config, consumeStatusBar};
